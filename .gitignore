@@ -1,0 +1,22 @@
+# Exports & Reports
+*.csv
+*.json
+*.xml
+*.log
+
+# PowerShell Temporary & History
+*.ps1xml
+*.clixml
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# IDE / Editor configuration
+.vscode/
+.idea/
+*.suo
+*.user
