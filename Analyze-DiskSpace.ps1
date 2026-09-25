@@ -1,30 +1,29 @@
 <#
 .SYNOPSIS
-    Read-only Windows disk space analysis and diagnostic utility.
+    Read-only Windows disk space analysis and diagnostic CLI utility.
 
 .DESCRIPTION
-    Analyze-DiskSpace inspects local storage volumes, scans for top space-consuming files,
-    and calculates directory sizes without making ANY modifications to the system.
-    Strictly follows a zero-mutation, read-only security policy.
+    Analyze-DiskSpace provides high-visibility storage diagnostics directly in the terminal,
+    auditing local storage volumes, identifying space-consuming files, and calculating
+    directory footprints without modifying system state.
+    Engineered with a clean Single Responsibility Principle (SRP) architecture.
 
 .SECURITY GUARANTEE
-    - ZERO MUTATION: Contains NO code paths to delete, move, clean, or modify any files,
-      directories, volumes, or registry keys.
-    - LEAST PRIVILEGE: Operates safely in standard, non-elevated user sessions.
-    - DEFENSIVE PARSING: Handles restricted/locked files and directories gracefully
-      without attempting to take ownership or alter permissions.
+    - ZERO MUTATION: Strictly read-only. Contains NO code paths to modify, clean, or delete files.
+    - LEAST PRIVILEGE: Executes safely in standard non-administrator sessions.
+    - SAFE GUARDS: Bypasses locked and protected system paths gracefully without elevation.
 
 .PARAMETER Drive
     Target drive letter to inspect (e.g., "C:", "D", "E:").
 
 .PARAMETER Path
-    Target directory path to inspect. If omitted and -Drive is specified, defaults to the root of that drive.
+    Target directory path to inspect.
 
 .PARAMETER TopFiles
-    Number of largest files to report (e.g., 20).
+    Number of largest files to report (Range: 1-1000, Default: 20).
 
 .PARAMETER TopFolders
-    Number of largest subdirectories to report (e.g., 10).
+    Number of largest subdirectories to report (Range: 1-100, Default: 10).
 
 .PARAMETER OpenSettings
     Launches native Windows Storage Sense settings GUI (ms-settings:storagesense).
@@ -37,7 +36,7 @@
 
 .EXAMPLE
     .\Analyze-DiskSpace.ps1
-    Displays a colorized overview of all local storage volumes.
+    Displays a beautified TUI summary card and volume audit table.
 
 .EXAMPLE
     .\Analyze-DiskSpace.ps1 -Drive C: -TopFiles 20
@@ -45,7 +44,7 @@
 
 .EXAMPLE
     .\Analyze-DiskSpace.ps1 -Drive C: -TopFolders 10
-    Calculates and displays the top 10 largest folders on drive C:.
+    Displays the top 10 largest folders on drive C:.
 
 .EXAMPLE
     .\Analyze-DiskSpace.ps1 -OpenSettings
@@ -90,204 +89,109 @@ param (
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Write-SecurityBanner {
-    Write-Host "[SECURITY NOTICE] " -ForegroundColor Cyan -NoNewline
-    Write-Host "Strict Read-Only Mode active. No files will be modified or deleted." -ForegroundColor DarkGray
-    Write-Host ""
-}
+# Ensure console supports UTF-8 Unicode characters (borders, blocks)
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
 
-function Format-Bytes {
-    param([double]$Bytes)
-    if ($Bytes -ge 1TB) {
-        return "$([math]::Round($Bytes / 1TB, 2)) TB"
-    } elseif ($Bytes -ge 1GB) {
-        return "$([math]::Round($Bytes / 1GB, 2)) GB"
-    } elseif ($Bytes -ge 1MB) {
-        return "$([math]::Round($Bytes / 1MB, 2)) MB"
-    } elseif ($Bytes -ge 1KB) {
-        return "$([math]::Round($Bytes / 1KB, 2)) KB"
-    } else {
-        return "$Bytes B"
-    }
-}
+# --- Load SRP Core Modules ---
+$moduleRoot = Join-Path -Path $PSScriptRoot -ChildPath "src"
+. (Join-Path -Path $moduleRoot -ChildPath "Formatters.ps1")
+. (Join-Path -Path $moduleRoot -ChildPath "Collectors.ps1")
+. (Join-Path -Path $moduleRoot -ChildPath "TerminalUI.ps1")
+. (Join-Path -Path $moduleRoot -ChildPath "Exporters.ps1")
 
-function Export-DiagnosticData {
-    param(
-        [Parameter(Mandatory = $true)]
-        [array]$Data,
-        [string]$Format,
-        [string]$Destination
-    )
+# Always render branded security card
+Show-SecurityHeader
 
-    if (-not $Format -or -not $Destination) {
-        return
-    }
-
-    try {
-        $parentDir = Split-Path -Path $Destination -Parent
-        if ($parentDir -and -not (Test-Path -Path $parentDir)) {
-            New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
-        }
-
-        if ($Format -eq 'CSV') {
-            $Data | Export-Csv -Path $Destination -NoTypeInformation -Encoding UTF8
-            Write-Host "`n[EXPORT] Report saved to: $Destination (CSV)" -ForegroundColor Green
-        } elseif ($Format -eq 'JSON') {
-            $Data | ConvertTo-Json -Depth 4 | Set-Content -Path $Destination -Encoding UTF8
-            Write-Host "`n[EXPORT] Report saved to: $Destination (JSON)" -ForegroundColor Green
-        }
-    } catch {
-        Write-Warning "Failed to export diagnostic data to '$Destination': $_"
-    }
-}
-
-# --- Action: Open Native Storage Settings ---
+# Action: Open Windows Storage Sense
 if ($OpenSettings) {
-    Write-SecurityBanner
-    Write-Host "Opening Windows Storage Sense (ms-settings:storagesense)..." -ForegroundColor Cyan
+    Write-Host "Opening Windows Storage Sense (ms-settings:storagesense)...`n" -ForegroundColor Cyan
     Start-Process "ms-settings:storagesense"
     exit 0
 }
 
-# --- Action: Files Scanner ---
+# Resolve target path
+$targetPath = if ($Path) { $Path } elseif ($Drive) { "$($Drive.TrimEnd(':')):\ " } else { $null }
+if ($targetPath) { $targetPath = $targetPath.Trim() }
+
+# Action: Top Files Scanner
 if ($PSCmdlet.ParameterSetName -eq 'Files') {
-    Write-SecurityBanner
-    
-    $targetPath = if ($Path) { $Path } else { "$($Drive.TrimEnd(':')):\ " }
-    $targetPath = $targetPath.Trim()
-    
-    if (-not (Test-Path -LiteralPath $targetPath)) {
-        Write-Error "Target path '$targetPath' does not exist."
-        exit 1
-    }
+    $rawFiles = Get-HeaviestFiles -TargetPath $targetPath -Count $TopFiles
+    Show-FilesTable -Files $rawFiles -TargetPath $targetPath
 
-    Write-Host "Scanning top $TopFiles largest files under '$targetPath' (Read-Only)..." -ForegroundColor Cyan
-    Write-Host "(Skipping protected system files and access-denied paths safely)" -ForegroundColor DarkGray
-    Write-Host ""
-
-    $results = @()
-    try {
-        $files = Get-ChildItem -LiteralPath $targetPath -Recurse -File -Force -ErrorAction SilentlyContinue |
-            Sort-Object Length -Descending |
-            Select-Object -First $TopFiles
-
-        foreach ($file in $files) {
-            $results += [PSCustomObject]@{
-                "File Name" = $file.Name
-                "Size"      = Format-Bytes $file.Length
-                "SizeBytes" = $file.Length
-                "Extension" = $file.Extension
-                "Directory" = $file.DirectoryName
+    if ($ExportFormat -and $OutFile) {
+        $exportItems = foreach ($f in $rawFiles) {
+            [PSCustomObject]@{
+                FileName  = $f.FileName
+                Size      = Format-ByteSize $f.SizeBytes
+                SizeBytes = $f.SizeBytes
+                Extension = $f.Extension
+                Directory = $f.Directory
             }
         }
-    } catch {
-        Write-Warning "Error during file scan: $_"
-    }
-
-    if ($results.Count -gt 0) {
-        $results | Select-Object "File Name", "Size", "Extension", "Directory" | Format-Table -AutoSize
-        Export-DiagnosticData -Data $results -Format $ExportFormat -Destination $OutFile
-    } else {
-        Write-Host "No files found or unable to access files under '$targetPath'." -ForegroundColor Yellow
+        Export-DiagnosticReport -Data $exportItems -Format $ExportFormat -DestinationPath $OutFile
     }
     exit 0
 }
 
-# --- Action: Folders Breakdown ---
+# Action: Top Folders Breakdown
 if ($PSCmdlet.ParameterSetName -eq 'Folders') {
-    Write-SecurityBanner
-    
-    $targetPath = if ($Path) { $Path } else { "$($Drive.TrimEnd(':')):\ " }
-    $targetPath = $targetPath.Trim()
+    Write-Host "Measuring top-level folders under '$targetPath' (Read-Only)...`n" -ForegroundColor Cyan
+    $rawFolders = Get-HeaviestFolders -TargetPath $targetPath -Count $TopFolders
+    Show-FoldersTable -Folders $rawFolders -TargetPath $targetPath
 
-    if (-not (Test-Path -LiteralPath $targetPath)) {
-        Write-Error "Target path '$targetPath' does not exist."
-        exit 1
+    if ($ExportFormat -and $OutFile) {
+        $exportItems = foreach ($f in $rawFolders) {
+            [PSCustomObject]@{
+                FolderName = $f.FolderName
+                Size       = Format-ByteSize $f.SizeBytes
+                SizeBytes  = $f.SizeBytes
+                FullPath   = $f.FullPath
+            }
+        }
+        Export-DiagnosticReport -Data $exportItems -Format $ExportFormat -DestinationPath $OutFile
     }
+    exit 0
+}
 
-    Write-Host "Measuring top-level folders under '$targetPath' (Read-Only)..." -ForegroundColor Cyan
-    Write-Host ""
+# Action: Volume Summary Overview (Default)
+$rawVolumes = Get-SystemVolumes
+$enrichedVolumes = foreach ($v in $rawVolumes) {
+    $health = Get-HealthAssessment -TotalBytes $v.TotalBytes -FreeBytes $v.FreeBytes
+    $meter  = Get-AsciiProgressBar -UsedPercent $health.UsedPercent
 
-    $results = @()
-    $subDirs = Get-ChildItem -LiteralPath $targetPath -Directory -Force -ErrorAction SilentlyContinue
+    [PSCustomObject]@{
+        DriveLetter  = $v.DriveLetter
+        Label        = $v.Label
+        TotalBytes   = $v.TotalBytes
+        UsedBytes    = $v.UsedBytes
+        FreeBytes    = $v.FreeBytes
+        FreePercent  = $health.FreePercent
+        UsedPercent  = $health.UsedPercent
+        ProgressBar  = $meter
+        HealthStatus = $health.HealthStatus
+        StatusColor  = $health.StatusColor
+    }
+}
 
-    foreach ($dir in $subDirs) {
-        $measure = Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
-            Measure-Object -Property Length -Sum
+Show-StorageSummary -EnrichedVolumes $enrichedVolumes
+Show-VolumeTable -EnrichedVolumes $enrichedVolumes
+Show-Recommendations
 
-        $folderSize = if ($null -ne $measure -and $null -ne $measure.Sum) { [double]$measure.Sum } else { 0.0 }
-
-        $results += [PSCustomObject]@{
-            "Folder Name" = $dir.Name
-            "Size"        = Format-Bytes $folderSize
-            "SizeBytes"   = $folderSize
-            "FullPath"    = $dir.FullName
+if ($ExportFormat -and $OutFile) {
+    $exportItems = foreach ($v in $enrichedVolumes) {
+        [PSCustomObject]@{
+            Drive        = $v.DriveLetter
+            Label        = $v.Label
+            Total        = Format-ByteSize $v.TotalBytes
+            Used         = Format-ByteSize $v.UsedBytes
+            Free         = Format-ByteSize $v.FreeBytes
+            "% Free"     = "$($v.FreePercent)%"
+            Health       = $v.HealthStatus
+            TotalBytes   = $v.TotalBytes
+            FreeBytes    = $v.FreeBytes
         }
     }
-    Write-Progress -Activity "Measuring Folder Sizes" -Completed
-
-    $topDirs = $results | Sort-Object SizeBytes -Descending | Select-Object -First $TopFolders
-
-    if ($topDirs) {
-        $topDirs | Select-Object "Folder Name", "Size", "FullPath" | Format-Table -AutoSize
-        Export-DiagnosticData -Data $topDirs -Format $ExportFormat -Destination $OutFile
-    } else {
-        Write-Host "No subdirectories found under '$targetPath'." -ForegroundColor Yellow
-    }
-    exit 0
+    Export-DiagnosticReport -Data $exportItems -Format $ExportFormat -DestinationPath $OutFile
 }
-
-# --- Default Action: Volume Overview ---
-Write-SecurityBanner
-Write-Host "Auditing storage volumes (Read-Only Diagnostic)...`n" -ForegroundColor Cyan
-
-$volumes = @()
-try {
-    $volumes = Get-Volume | Where-Object { $_.DriveType -eq 'Fixed' -and $_.Size -gt 0 }
-} catch {
-    # Fallback to Get-PSDrive if Get-Volume is unavailable
-    $volumes = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -gt 0 }
-}
-
-$reportData = @()
-
-foreach ($vol in $volumes) {
-    $driveLetter = if ($vol.DriveLetter) { "$($vol.DriveLetter):" } else { $vol.Name }
-    $totalSize   = if ($vol.Size) { $vol.Size } else { ($vol.Used + $vol.Free) }
-    $freeSize    = if ($vol.SizeRemaining) { $vol.SizeRemaining } else { $vol.Free }
-    $usedSize    = $totalSize - $freeSize
-    
-    $freePercent = if ($totalSize -gt 0) { [math]::Round(($freeSize / $totalSize) * 100, 1) } else { 0 }
-    $usedPercent = 100 - $freePercent
-
-    # Progress bar visualization (20 characters)
-    $usedBlocks = [math]::Round(($usedPercent / 100) * 20)
-    $freeBlocks = 20 - $usedBlocks
-    $bar = "[" + ("#" * $usedBlocks) + ("-" * $freeBlocks) + "]"
-
-    # Status classification
-    $statusColor = if ($freePercent -lt 10) { "Red" } elseif ($freePercent -lt 25) { "Yellow" } else { "Green" }
-    $healthStatus = if ($freePercent -lt 10) { "CRITICAL" } elseif ($freePercent -lt 25) { "WARNING" } else { "HEALTHY" }
-
-    $reportData += [PSCustomObject]@{
-        "Drive"        = $driveLetter
-        "Label"        = if ($vol.FileSystemLabel) { $vol.FileSystemLabel } else { "" }
-        "Total"        = Format-Bytes $totalSize
-        "Used"         = Format-Bytes $usedSize
-        "Free"         = Format-Bytes $freeSize
-        "% Free"       = "$freePercent%"
-        "Usage Graph"  = $bar
-        "Health"       = $healthStatus
-        "TotalBytes"   = $totalSize
-        "FreeBytes"    = $freeSize
-    }
-}
-
-$reportData | Select-Object "Drive", "Label", "Total", "Used", "Free", "% Free", "Usage Graph", "Health" | Format-Table -AutoSize
-
-Write-Host "`nRecommendations:" -ForegroundColor Cyan
-Write-Host "  - To inspect largest files on a drive:  .\Analyze-DiskSpace.ps1 -Drive C: -TopFiles 20" -ForegroundColor Gray
-Write-Host "  - To inspect largest directories:      .\Analyze-DiskSpace.ps1 -Drive C: -TopFolders 10" -ForegroundColor Gray
-Write-Host "  - To open Windows Storage Sense GUI:   .\Analyze-DiskSpace.ps1 -OpenSettings" -ForegroundColor Gray
-
-Export-DiagnosticData -Data $reportData -Format $ExportFormat -Destination $OutFile

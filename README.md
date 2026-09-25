@@ -46,14 +46,22 @@ Inspects all fixed local drives, calculates free/used percentages, and renders v
 
 Output:
 ```text
-[SECURITY NOTICE] Strict Read-Only Mode active. No files will be modified or deleted.
+╭─────────────────────────────────────────────────────────────────────────────╮
+│ WIN DISK ANALYZER • v1.1.0                                Cognivyn Infrasys │
+│ Security: Strictly Read-Only (Zero Mutation)          Host: HORIZON         │
+│ Privilege: Non-Elevated Standard User            Audit: 2026-09-25 14:42:43 │
+╰─────────────────────────────────────────────────────────────────────────────╯
 
-Auditing storage volumes (Read-Only Diagnostic)...
+  CAPACITY: 476.61 GB  │  USED: 450.27 GB (94.5%)  │  FREE: 26.35 GB  │  STATUS: 2 Critical Drive(s)
 
-Drive Label Total     Used      Free      % Free Usage Graph          Health
------ ----- -----     ----      ----      ------ -----------          ------
-C:    OS    475.69 GB 312.44 GB 163.25 GB 34.3%  [#############-------] HEALTHY
-D:    Data  931.51 GB 820.10 GB 111.41 GB 12.0%  [##################--] WARNING
+┌──────┬────────────┬───────────┬───────────┬───────────┬────────┬────────────────────────┬──────────┐
+│ DRV  │ LABEL       │  TOTAL    │   USED    │   FREE    │ % FREE  │ USAGE METER             │ HEALTH   │
+├──────┼────────────┼───────────┼───────────┼───────────┼────────┼────────────────────────┼──────────┤
+│ D:   │ New Volume │   1024 MB │ 698.46 MB │ 325.54 MB │  31.8% │ [██████████████░░░░░░] │ HEALTHY  │
+│ W:   │ Workspace  │   7.81 GB │   5.08 GB │   2.73 GB │    35% │ [█████████████░░░░░░░] │ HEALTHY  │
+│ C:   │ Windows    │ 413.55 GB │ 393.08 GB │  20.47 GB │     5% │ [███████████████████░] │ CRITICAL │
+│ Z:   │ Dev        │  54.25 GB │  51.43 GB │   2.82 GB │   5.2% │ [███████████████████░] │ CRITICAL │
+└──────┴────────────┴───────────┴───────────┴───────────┴────────┴────────────────────────┴──────────┘
 ```
 
 ### 2. Find Largest Files
@@ -145,6 +153,22 @@ Get-ChildItem -Path C:\ -Directory -Force -ErrorAction SilentlyContinue | ForEac
 ### Windows CMD (Command Prompt)
 ```cmd
 wmic logicaldisk get Caption, FreeSpace, Size
+```
+
+---
+
+## 🏛️ Modular & SRP Architecture
+
+The codebase strictly adheres to the **Single Responsibility Principle (SRP)**, dividing concerns into isolated, testable modules:
+
+```text
+win-disk-analyzer/
+├── Analyze-DiskSpace.ps1       # CLI Orchestrator: Argument parsing & workflow dispatch
+└── src/
+    ├── Collectors.ps1          # Pure Data Ingestion: Safe read-only OS queries
+    ├── Formatters.ps1          # Pure Math & Units: Byte scaling, status & progress bar math
+    ├── TerminalUI.ps1          # Pure Presentation: Unicode box cards, tables, color pills
+    └── Exporters.ps1           # Pure Persistence: CSV and JSON serialization
 ```
 
 ---
