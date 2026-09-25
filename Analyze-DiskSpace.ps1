@@ -212,11 +212,10 @@ if ($PSCmdlet.ParameterSetName -eq 'Folders') {
     $subDirs = Get-ChildItem -LiteralPath $targetPath -Directory -Force -ErrorAction SilentlyContinue
 
     foreach ($dir in $subDirs) {
-        Write-Progress -Activity "Measuring Folder Sizes" -Status "Analyzing: $($dir.Name)"
-        $folderSize = (Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
-            Measure-Object -Property Length -Sum).Sum
+        $measure = Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -Force -ErrorAction SilentlyContinue |
+            Measure-Object -Property Length -Sum
 
-        if ($null -eq $folderSize) { $folderSize = 0 }
+        $folderSize = if ($null -ne $measure -and $null -ne $measure.Sum) { [double]$measure.Sum } else { 0.0 }
 
         $results += [PSCustomObject]@{
             "Folder Name" = $dir.Name
